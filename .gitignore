@@ -1,0 +1,19 @@
+# VSCode folder
+.vscode/
+
+# Other folders
+temp/
+testbench/soft/
+testbench/old/
+testbench/*_old.*
+
+# Devcpp project files
+*.dev
+*.layout
+Makefile.win
+
+# Objects
+*.o
+*.exe
+
+
