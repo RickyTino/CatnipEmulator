@@ -16,10 +16,15 @@ MIPS32_Core::MIPS32_Core(AXI32_Slave *mem, MIPS32_Tracer *t)
 
 void MIPS32_Core::reset()
 {
-    cp0.write(CP0_ERROREPC, pc);
     nextpc = 0xbfc00000;
-    gpr[0] = 0;
+    pc = 0;
+    for (u32 i = 0; i < 32; ++i)
+        gpr[i] = 0;
+    hilo = 0;
+    llbit = false;
+    branch_flag = false;
     branch_taken = false;
+    inDelaySlot = false;
     exception_flag = false;
     cp0.reset();
 }
@@ -39,9 +44,6 @@ void MIPS32_Core::cycle()
     // Renew PC
     // pc = nextpc;
     renewpc();
-    
-    
-    
     // nextpc = pc + 4;
 
     // CP0 cycle
@@ -71,9 +73,17 @@ bool* MIPS32_Core::get_irq(u32 irq_num)
 u32 MIPS32_Core::fetch(u32 addr)
 {
     if (exception_flag) return 0;
-    if ((addr & 0x3) != 0) 
+    if ((addr & 0x3) != 0) {
         exception(I_ADE, addr);
-    u32 phyAddr = addrTranslate(addr);
+        return 0;
+    }
+    if (user_exc(addr)) {           // user mode fetch into kernel segments
+        exception(I_ADE, addr);
+        return 0;
+    }
+    u32 phyAddr;
+    if (!addrTranslate(addr, false, true, phyAddr))
+        return 0;
     return memory->read(phyAddr, 4);
 }
 
@@ -125,7 +135,7 @@ void MIPS32_Core::execute(u32 inst)
                 case SP_DIVU:    divide(rs, rt, false); break;
                 case SP_ADD:     add_CheckOv(gpr[rs], gpr[rt], rd); break;
                 case SP_ADDU:    writeGPR(rd, gpr[rs] + gpr[rt]); break;
-                case SP_SUB:     add_CheckOv(gpr[rs], -(s32)gpr[rt], rd); break;
+                case SP_SUB:     sub_CheckOv(gpr[rs], gpr[rt], rd); break;
                 case SP_SUBU:    writeGPR(rd, gpr[rs] - gpr[rt]); break;
                 case SP_AND:     writeGPR(rd, gpr[rs] & gpr[rt]); break;
                 case SP_OR:      writeGPR(rd, gpr[rs] | gpr[rt]); break;
@@ -187,11 +197,11 @@ void MIPS32_Core::execute(u32 inst)
                     case C0_MTC0:  cp0.write(CP0_REG(rd, sel), gpr[rt]); break;
                     case C0_CO:
                         switch (funct) {
-                            case C0F_TLBR: break;
-                            case C0F_TLBWI: break;
-                            case C0F_TLBWR: break;
-                            case C0F_TLBP: break;
-                            case C0F_ERET: exception(ERET); break; 
+                            case C0F_TLBR:  cp0.tlbr(); break;
+                            case C0F_TLBWI: cp0.tlbwi(); break;
+                            case C0F_TLBWR: cp0.tlbwr(); break;
+                            case C0F_TLBP:  cp0.tlbp(); break;
+                            case C0F_ERET: exception(ERET); break;
                             case C0F_WAIT: break;
                             default: exception(RESVINST); break;
                         }
@@ -311,8 +321,11 @@ void MIPS32_Core::exception(Exception e, u32 info, bool isStore)
         
         case I_TLBR:
         case D_TLBR:
-            if (exl) exc_pc = exc_vector_base;
-            else    exc_pc = exc_vector_base + 0x180;
+            // TLB Refill goes to the refill vector (base) when not nested,
+            // otherwise it degrades to the general exception vector (+0x180),
+            // matching MangoMIPS32 Control.v {bev, exl} selection.
+            if (exl) exc_pc = exc_vector_base + 0x180;
+            else     exc_pc = exc_vector_base;
             break;
         
         case ERET:
@@ -373,27 +386,39 @@ void MIPS32_Core::writeGPR(u32 regaddr, u32 data)
         tracer->trace(pc, regaddr, data);
 }
 
-u32 MIPS32_Core::addrTranslate(u32 vaddr)
+bool MIPS32_Core::addrTranslate(u32 vaddr, bool isStore, bool isFetch, u32 &paddr)
 {
-    //Temp - Fixed Mapping MMU
+    // Segment rules follow MangoMIPS32 MMU.v (TLB-based mode) and MIPS32
+    // Vol III §4.7 ("Address Translation for the kuseg Segment when
+    // StatusERL = 1": kuseg is unmapped when ERL=1, mapped when ERL=0):
+    //   kseg0 / kseg1 : unmapped, PA = VA & 0x1FFFFFFF
+    //   everything else (kuseg / kseg2 / kseg3): with Status.ERL=1 they are
+    //   identity-mapped the same way; otherwise translated through the TLB.
     u32 seg = vaddr >> 29;
-    u32 paddr;
-    switch (seg) {
-        case 4:
-        case 5: paddr = vaddr & 0x1FFFFFFF; break;
-        case 6:
-        case 7: paddr = vaddr; break;
-        default: paddr = cp0.Status_ERL() ? vaddr : vaddr + 0x40000000;
+    if (seg == 4 || seg == 5 || cp0.Status_ERL()) {
+        paddr = vaddr & 0x1FFFFFFF;
+        return true;
     }
-    return paddr;
 
-    // I-TLBR, I-TLBI
-}
-
-bool MIPS32_Core::addrCCA(u32 vaddr)
-{
-    // Temp
-    return false;
+    // TLB-mapped access (callers already checked alignment & user mode
+    // segment permission, so permission faults surface as TLB exceptions).
+    u32 pfn;
+    bool vld, drt;
+    u32 cat, eob;
+    if (!cp0.tlbTranslate(vaddr, pfn, vld, drt, cat, eob)) {
+        exception(isFetch ? I_TLBR : D_TLBR, vaddr, isStore);
+        return false;
+    }
+    if (!vld) {
+        exception(isFetch ? I_TLBI : D_TLBI, vaddr, isStore);
+        return false;
+    }
+    if (isStore && !drt) {
+        exception(D_TLBM, vaddr, true);
+        return false;
+    }
+    paddr = (pfn << 12) | (vaddr & ((1u << eob) - 1));
+    return true;
 }
 
 void MIPS32_Core::load(u32 reg, u32 vaddr, u32 size, bool isSigned)
@@ -402,7 +427,9 @@ void MIPS32_Core::load(u32 reg, u32 vaddr, u32 size, bool isSigned)
         exception(D_ADE, vaddr, 0);
         return;
     }
-    u32 paddr = addrTranslate(vaddr);
+    u32 paddr;
+    if (!addrTranslate(vaddr, false, false, paddr))
+        return;
     u32 temp = memory->read(paddr, size);
     u32 res;
     if (size == 1 && isSigned) 
@@ -421,7 +448,9 @@ void MIPS32_Core::store(u32 reg, u32 vaddr, u32 size)
         return;
     }
 
-    u32 paddr = addrTranslate(vaddr);
+    u32 paddr;
+    if (!addrTranslate(vaddr, true, false, paddr))
+        return;
     memory->write(gpr[reg], paddr, size);
 }
 
@@ -431,7 +460,9 @@ void MIPS32_Core::load_ual(u32 reg, u32 vaddr, bool left)
         exception(D_ADE, vaddr, 0);
         return;
     }
-    u32 paddr = addrTranslate(vaddr);
+    u32 paddr;
+    if (!addrTranslate(vaddr, false, false, paddr))
+        return;
     u32 memdata = memory->read(paddr, 4);
     u32 regdata = gpr[reg];
     u32 res;
@@ -451,6 +482,7 @@ void MIPS32_Core::load_ual(u32 reg, u32 vaddr, bool left)
             case 3: res = bitConcat(regdata >>  8,  8, memdata >> 24);
         }
     }
+    writeGPR(reg, res);
 }
 
 void MIPS32_Core::store_ual(u32 reg, u32 vaddr, bool left)
@@ -459,8 +491,9 @@ void MIPS32_Core::store_ual(u32 reg, u32 vaddr, bool left)
         exception(D_ADE, vaddr, 1);
         return;
     }
-    u32 paddr = addrTranslate(vaddr);
-    u32 res;
+    u32 paddr;
+    if (!addrTranslate(vaddr, true, false, paddr))
+        return;
     u32 regdata = gpr[reg];
     if (left) {
         switch (vaddr & 0x3) {
@@ -486,7 +519,9 @@ void MIPS32_Core::load_link(u32 reg, u32 vaddr)
         exception(D_ADE, vaddr, 0);
         return;
     }
-    u32 paddr = addrTranslate(vaddr);
+    u32 paddr;
+    if (!addrTranslate(vaddr, false, false, paddr))
+        return;
     u32 res = memory->read(paddr, 4);
     writeGPR(reg, res);
     llbit = 1;
@@ -498,11 +533,15 @@ void MIPS32_Core::store_cond(u32 reg, u32 vaddr)
         exception(D_ADE, vaddr, 1);
         return;
     }
-    u32 paddr = addrTranslate(vaddr);
-    u32 data = gpr[reg];
-    if(llbit){
-        memory->write(data, paddr, 4);
-    }
+    // MIPS32 Vol II-A, SC: the alignment check and AddressTranslation are
+    // unconditional; only the store itself is gated by LLbit.  MangoMIPS32
+    // ALU_EX.v gates both on LLbit (MangoMIPS32/KnownBugs.md BUG-002) - we
+    // follow the spec here on purpose, so do not "fix" it to match the RTL.
+    u32 paddr;
+    if (!addrTranslate(vaddr, true, false, paddr))
+        return;
+    if (llbit)
+        memory->write(gpr[reg], paddr, 4);
     writeGPR(reg, (u32)llbit);
 }
 
@@ -534,12 +573,27 @@ void MIPS32_Core::divide(u32 rs, u32 rt, bool isSigned)
 
 void MIPS32_Core::add_CheckOv(s32 a, s32 b, u32 rd)
 {
-    s32 c = a + b;
-    if ((a >= 0 && b >= 0 && c < 0) || (a < 0)&&(b < 0)&&(c >= 0))
-        // Overflow Exception
+    // Widen to 64 bits: the range check is exactly ALU_EX.v's `ALU_ADD` rule
+    // (`(as & bs & ~rs) | (~as & ~bs & rs)`), and the sum itself cannot
+    // overflow.  The old `s32 c = a + b;` was undefined behaviour as soon as
+    // it overflowed - i.e. in the very case this function exists to catch.
+    s64 res = (s64)a + (s64)b;
+    if (res < INT32_MIN || res > INT32_MAX)
         exception(INTOVERFLOW);
     else
-        writeGPR(rd, c);
+        writeGPR(rd, (u32)res);
+}
+
+void MIPS32_Core::sub_CheckOv(s32 a, s32 b, u32 rd)
+{
+    // Same for ALU_EX.v's `ALU_SUB`.  Subtracting directly also removes the
+    // old `add_CheckOv(rs, -(s32)rt, rd)` call form, whose negation was UB
+    // for rt = 0x80000000 and made SUB report the opposite of the RTL.
+    s64 res = (s64)a - (s64)b;
+    if (res < INT32_MIN || res > INT32_MAX)
+        exception(INTOVERFLOW);
+    else
+        writeGPR(rd, (u32)res);
 }
 
 u32 MIPS32_Core::clz(u32 a)

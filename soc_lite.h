@@ -5,8 +5,7 @@
 #include "bit_utils.h"
 #include "mips32_core.h"
 #include "axi.h"
-
-#define OS_IS_WINDOWS
+#include <time.h>
 
 #ifdef OS_IS_WINDOWS
     #include <windows.h>
@@ -42,9 +41,6 @@
 
 class SoCLite_Confreg : public AXI32_Slave {
 private:
-    bool uart_end;
-
-private:
     // u8 readb(u32 addr);
     // void writeb(u8 data, u32 addr);
     u32 readw(u32 addr);
@@ -65,6 +61,7 @@ public:
     u32 simflag;
     bool opentrace;
     u32 monitor;
+    bool uart_end;
 
     SoCLite_Confreg();
     void cycle();
@@ -96,7 +93,9 @@ public:
     SoCLite();
     void run_func();
     void run_perf();
+    void run_tlb();
 };
 
 
 #endif
+

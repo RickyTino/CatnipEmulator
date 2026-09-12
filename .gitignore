@@ -16,4 +16,10 @@ Makefile.win
 *.o
 *.exe
 
+# Linux binary
+soc_lite
+
+# TLB test build outputs (test.S / ram.ld / convert.py / Makefile are kept)
+testbench/tlb_test/tlb_test.*
+
 

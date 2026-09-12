@@ -16,14 +16,16 @@ typedef char                s8;
 typedef unsigned char       u8;
 typedef short               s16;
 typedef unsigned short      u16;
-typedef long                s32;
-typedef unsigned long       u32;
+//typedef long                s32;
+//typedef unsigned long       u32;
+typedef int                 s32;
+typedef unsigned int        u32;
 typedef long long           s64;
 typedef unsigned long long  u64;
 
 // Constants
-#define MAX_U8  256
-#define MAX_U16 65536
-#define MAX_U32 4294967296
+#define MAX_U8  255
+#define MAX_U16 65535
+#define MAX_U32 4294967295u
 
 #endif

@@ -1,40 +1,36 @@
-// #include "common_defs.h"
-// #include "bit_utils.h"
+// CatnipEmulator: run mode selector.
+//   ./soc_lite            -> run_perf (default, contest demo behavior)
+//   ./soc_lite perf       -> run_perf
+//   ./soc_lite func       -> run_func (functional tests vs golden trace)
+//   ./soc_lite tlb        -> run_tlb  (TLB functional test)
 #include "soc_lite.h"
+#include <cstring>
 
-// u32 clz(u32 a)
-// {
-//     for (u32 i = 0; i < 32; ++i) {
-//         if (a & 0x80000000)
-//             return i;
-//         a <<= 1;
-//     }
-//     return 32;
-// }
-
-int main()
+static void usage(const char *prog)
 {
-    // u32 a = 0xDEC0DE1C;
-    // u32 t = bitPart(a, 27, 11);
-    // cout << hex << t << endl;
-    // u32 x1 = 0x12;
-    // u32 x2 = bitConcat(x1, 8, 0x34);
-    // u32 x3 = bitConcat(x2, 8, 0x56);
-    // u32 x4 = bitConcat(x3, 8, 0x78);
-    // cout << x4 << endl;
-    // a = bitReplace(a, 23, 8, 0xDEAD);
-    // cout <<  a << endl;
-
-    // cout << CP0_INDEX << endl;
-    // cout << BADVADDR << endl;
-
-    // u32 b = 0x80000000;
-    // cout << clz(b) << endl;
-
-    // return 0;
-    SoCLite soc;
-    soc.run_perf();
-    return 0;
+    cerr << "usage: " << prog << " [perf|func|tlb]" << endl;
 }
 
+int main(int argc, char *argv[])
+{
+    const char *mode = (argc > 1) ? argv[1] : "perf";
 
+    bool is_perf = strcmp(mode, "perf") == 0;
+    bool is_func = strcmp(mode, "func") == 0;
+    bool is_tlb  = strcmp(mode, "tlb")  == 0;
+    if (!is_perf && !is_func && !is_tlb) {
+        usage(argv[0]);
+        return 1;
+    }
+
+    SoCLite soc;
+
+    if (is_func)
+        soc.run_func();
+    else if (is_tlb)
+        soc.run_tlb();
+    else
+        soc.run_perf();
+
+    return 0;
+}

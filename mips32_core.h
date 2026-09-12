@@ -10,7 +10,6 @@
 
 class MIPS32_Core {
 private:
-    
     MIPS32_CP0 cp0;
     MIPS32_Tracer *tracer;
     AXI32_Slave *memory;
@@ -30,8 +29,6 @@ private:
     bool inDelaySlot;
     bool exception_flag;
     Exception exception_type;
-
-
     
 private:
     void reset();
@@ -45,8 +42,10 @@ private:
     void renewpc();
 
     void writeGPR(u32 regaddr, u32 data);  // Don't write gpr[0]
-    u32  addrTranslate(u32 addr);
-    bool addrCCA(u32 vaddr);
+    // Segment rules + TLB translation (MMU.v / TLBU.v semantics).  On
+    // success fills paddr and returns true; on a TLB Refill / Invalid /
+    // Modified the matching exception is raised and false is returned.
+    bool addrTranslate(u32 vaddr, bool isStore, bool isFetch, u32 &paddr);
     void load(u32 reg, u32 vaddr, u32 size, bool isSigned);
     void store(u32 reg, u32 vaddr, u32 size);
     void load_ual(u32 reg, u32 vaddr, bool left);
@@ -57,6 +56,7 @@ private:
     void divide(u32 rs, u32 rt, bool isSigned);
     // bool intOverflow(s32 a, s32 b);
     void add_CheckOv(s32 a, s32 b, u32 rd);
+    void sub_CheckOv(s32 a, s32 b, u32 rd);
     u32  clz(u32 a);
 
     bool usermode();

@@ -1,6 +1,12 @@
 #include "soc_lite.h"
+#include <cstdlib>
+#include <cstdio>
+#include <string>
+#ifndef OS_IS_WINDOWS
+    #include <unistd.h>
+#endif
 
-SoCLite_Confreg::SoCLite_Confreg() : 
+SoCLite_Confreg::SoCLite_Confreg() :
 AXI32_Slave(0x1FAF0000, 0x10000)
 {
     timer = 0;
@@ -20,23 +26,30 @@ void SoCLite_Confreg::write_uart(u32 data)
     if(!uart_end){
         uart = data;
         char ch = data;
-        #ifdef OS_IS_WINDOWS
-            SetConsoleTextAttribute(
-                GetStdHandle(STD_OUTPUT_HANDLE),
-                BACKGROUND_INTENSITY
-            );
-        #endif
-        cout << ch;
-        #ifdef OS_IS_WINDOWS
-            SetConsoleTextAttribute(
-                GetStdHandle(STD_OUTPUT_HANDLE),
-                FOREGROUND_INTENSITY
-            );
-        #endif
         if((u8)ch == 0xFF) {
             uart_end = true;
             //cout << "uart end. " << endl;
             //getch();
+        }
+        else {
+            #ifdef OS_IS_WINDOWS
+                SetConsoleTextAttribute(
+                    GetStdHandle(STD_OUTPUT_HANDLE),
+                    BACKGROUND_INTENSITY
+                );
+                cout << ch;
+                SetConsoleTextAttribute(
+                    GetStdHandle(STD_OUTPUT_HANDLE),
+                    FOREGROUND_INTENSITY
+                );
+            #else
+                // Only colorize when writing to a terminal, so redirected
+                // output stays free of escape sequences.
+                if (isatty(fileno(stdout)))
+                    cout << "\033[0;34m" << ch << "\033[0m";
+                else
+                    cout << ch;
+            #endif
         }
     }
 }
@@ -100,7 +113,9 @@ u32 SoCLite_Confreg::readw(u32 addr)
     return res;
 }
 
-void SoCLite_Confreg::writew(u32 data, u32 addr, u32 mask)
+// `mask` is part of the AXI32_Slave interface but is not used here: the
+// confreg is word-addressable, so byte-enables are ignored.
+void SoCLite_Confreg::writew(u32 data, u32 addr, u32 /*mask*/)
 {
     switch (addr & 0xFFFF){
         case CR0_ADDR: cr[0] = data; break;
@@ -133,7 +148,7 @@ void SoCLite_Confreg::writew(u32 data, u32 addr, u32 mask)
             if(monitor)
                 cout << "Number "<< dec << (digit >> 24) << " Functional Test Point PASS!!!" << endl;
             break;
-            
+
         case TIMER_ADDR:
             timer = data;
             cout << "Confreg > set timer = " << hex << timer << endl;
@@ -154,11 +169,13 @@ void SoCLite_Confreg::writew(u32 data, u32 addr, u32 mask)
 
 // }
 
+// Initialization order follows the member declaration order in soc_lite.h
+// (bus, tracer, cpu, sram) so that -Wreorder stays quiet.
 SoCLite::SoCLite() :
 bus(0, 0),
+tracer("testbench/golden_trace.txt"),
 cpu(&bus, &tracer),
-sram(0, 0, SRAM_WIDTH),
-tracer("testbench/golden_trace.txt")
+sram(0, 0, SRAM_WIDTH)
 {
     bus.addSlave(&confreg);
     bus.addSlave(&sram);
@@ -179,14 +196,48 @@ void SoCLite::run_func()
 void SoCLite::run_perf()
 {
     sram.loadHex("testbench/perf_ram.txt", 0);
-    tracer.trigger(false); 
-    s8 temp_sw;
-    cout << "Switch value:";
-    cin >> temp_sw;
-    confreg.swt = (u32)(~temp_sw);
+    tracer.trigger(false);
+    // Switch value: decimal, or 0x-prefixed hex.  The switch register is
+    // active-low, so its value is the bitwise complement of the input.
+    cout << "Switch value: ";
+    string sw_str;
+    if (!(cin >> sw_str)) {
+        cerr << "error: no switch value given (stdin is empty/closed)" << endl;
+        exit(1);
+    }
+    char *endp = NULL;
+    unsigned long sw = strtoul(sw_str.c_str(), &endp, 0);
+    if (endp == sw_str.c_str() || *endp != '\0' || sw > 0xFFFFFFFFul) {
+        cerr << "error: bad switch value '" << sw_str << "'" << endl;
+        exit(1);
+    }
+    confreg.swt = ~(u32)sw;
+    clock_t start, end;
+    start = clock();
     while (1) {
         //tracer.trigger(confreg.opentrace);
         cpu.cycle();
         confreg.cycle();
+        if(confreg.uart_end) break;
     }
+    end = clock();
+    cout << dec;
+    cout << "Execution time (clock): " << (double)(end - start)/CLOCKS_PER_SEC << "s" << endl;
+    cout << "Clocks per second: " << CLOCKS_PER_SEC << endl;
+}
+
+void SoCLite::run_tlb()
+{
+    // TLB functional test (ported from MangoMIPS32 Testbench/TLB_Test).
+    // The guest writes 0xFF to the virtual UART to signal successful
+    // completion; any unexpected exception hangs the guest instead.
+    sram.loadHex("testbench/tlb_ram.txt", 0);
+    tracer.trigger(false);
+    cout << "TLB test begin." << endl;
+    while (1) {
+        cpu.cycle();
+        confreg.cycle();
+        if (confreg.uart_end) break;
+    }
+    cout << "TLB test PASS (terminator received)." << endl;
 }

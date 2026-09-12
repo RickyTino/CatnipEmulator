@@ -5,7 +5,10 @@ u32 bitPart(u32 a, u32 msb, u32 lsb)
 {
     if (msb < lsb)
         return 0;
-    return ((a >> lsb) & ((1 << (msb - lsb + 1)) - 1));
+    u32 width = msb - lsb + 1;
+    if (width >= 32)        // (a >> lsb) is already 32 bits wide
+        return a >> lsb;
+    return (a >> lsb) & ((1u << width) - 1);
 }
 
 // bitConcat: Verilog " {a, b[b_width-1:0]}[31:0] ".
@@ -13,7 +16,7 @@ u32 bitConcat(u32 a, u32 b_width, u32 b)
 {
     if (b_width >= 32)
         return b;
-    return (b & ((1 << b_width) - 1)) | (a << b_width);
+    return (b & ((1u << b_width) - 1)) | (a << b_width);
 }
 
 // bitReplace: Verilog " a[msb:lsb] = b " (return value of a)
