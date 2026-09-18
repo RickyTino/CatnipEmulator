@@ -1,10 +1,10 @@
 # Build output
 build/
 
-# Executables (built into the project root)
+# Executables (cemu in the project root, the test binaries in tb/)
 /cemu
-/nscscc_tests
-/uart_test
+/tb/nscscc_tests
+/tb/uart_test
 
 # Editor / scratch
 .vscode/
