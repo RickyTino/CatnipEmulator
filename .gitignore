@@ -1,25 +1,38 @@
-# VSCode folder
+# Build output
+build/
+
+# Executables (built into the project root)
+/cemu
+/nscscc_tests
+/uart_test
+
+# Editor / scratch
 .vscode/
-
-# Other folders
 temp/
-testbench/soft/
-testbench/old/
-testbench/*_old.*
 
-# Devcpp project files
-*.dev
-*.layout
-Makefile.win
-
-# Objects
+# Safety net
 *.o
+*.d
+*.a
+*.log
 *.exe
 
-# Linux binary
-soc_lite
+# Test-program build output under tb/soft.  The harness needs the three ELF
+# images it loads at run time (func / perf allbench / tlb_func) plus
+# tb/soft/func/golden_trace.txt, so those stay tracked; everything else the
+# toolchain generates (hex/COE/MIF dumps, disassembly, per-benchmark ELFs)
+# does not.
+*.mif
+*.coe
+*.bin
+*.data
+tb/soft/*/convert
+tb/soft/**/test.s
+tb/soft/**/obj/**/main.elf
+!tb/soft/func/obj/main.elf
+!tb/soft/perf_func/obj/allbench/main.elf
+!tb/soft/tlb_func/obj/main.elf
 
-# TLB test build outputs (test.S / ram.ld / convert.py / Makefile are kept)
-testbench/tlb_test/tlb_test.*
-
-
+# Our own legacy TLB test: keep the sources (test.S, ram.ld, convert.py,
+# Makefile), ignore the build products.
+tb/legacy/tlb_test/tlb_test.*
