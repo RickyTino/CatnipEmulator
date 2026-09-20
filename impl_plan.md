@@ -183,7 +183,7 @@ UART16550 ────────→ MIPS32_Core::get_irq(2)   (现状，不动
 
 ### 5.2 EthernetLite
 
-- `M` 见 §2.4 的表：TPLER/TSR 收发、RPLR/RSR、MAC 编程序列、GIER 中断条件、ping/pong 双缓冲。
+- `M` 见 §2.4 的表：TPLR/TSR 收发、RPLR/RSR、MAC 编程序列、GIER 中断条件、ping/pong 双缓冲。
 - `M` `tick()`：每 N 个 cycle 调一次（照 `UART16550::pollCount` 的写法），从后端取帧、非阻塞。
 - `M` 收到帧时写入的缓冲按 RSR 轮转（ping→pong），与驱动 `next_rx_buf_to_use` 的期望一致。
 - 决定：**不建模 FCS**（内核按 `+ETH_FCS_LEN` 多读 4 字节，落在缓冲残余区，不影响 IP 栈；TX 侧驱动也只写真实帧长）。
@@ -263,7 +263,7 @@ public:
 
 ### 阶段 1：EthernetLite 行为 + MDIO/PHY + 自测
 
-- **1.1** TX 路径：TPLER 取长度、ping/pong 选择、`BUSY|ACTIVE` 触发、完成后"清 BUSY 留 ACTIVE"；先接一个内置回环（`null` 后端不落地文件，先写 `tb/eth_test.cpp` 的桩）。
+- **1.1** TX 路径：TPLR 取长度、ping/pong 选择、`BUSY|ACTIVE` 触发、完成后"清 BUSY 留 ACTIVE"；先接一个内置回环（`null` 后端不落地文件，先写 `tb/eth_test.cpp` 的桩）。
 - **1.2** MAC 编程序列（`BUSY|PROGRAM` → 取 6 字节、清 bit0/bit1）。
 - **1.3** RX 路径：写缓冲 + RPLR + `RSR.RECV_DONE`，清位后可复用。
 - **1.4** 中断条件（GIER/IER 位）+ `setIRQLine(bool*)`。
