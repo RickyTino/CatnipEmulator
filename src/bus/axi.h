@@ -32,11 +32,20 @@ class AXI32_Interconnect : public AXI32_Slave {
 private:
     vector<AXI32_Slave*> slaves;
 
+    // Accesses that decode to no slave: read() returns 0 and write() is
+    // dropped, which looks exactly like a hang when a guest jumps into
+    // unmapped space.  Report each distinct address once, then stay quiet.
+    static const u32 UNMAPPED_REPORT_MAX = 8;
+    u32  unmapped_seen[UNMAPPED_REPORT_MAX];
+    u32  unmapped_count;
+    bool unmapped_silenced;
+
 private:
     // u8 readb(u32 addr);
     // void writeb(u8 data, u32 addr);
     u32 readw(u32 addr);
     void writew(u32 data ,u32 addr, u32 mask);
+    void reportUnmapped(u32 addr, bool isWrite);
 
 public:
     AXI32_Interconnect(u32 base, u32 len);

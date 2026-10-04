@@ -89,6 +89,8 @@ AXI32_Interconnect::AXI32_Interconnect(u32 base, u32 len) :
 AXI32_Slave(base, len)
 {
     slaves.clear();
+    unmapped_count = 0;
+    unmapped_silenced = false;
 }
 
 void AXI32_Interconnect::addSlave(AXI32_Slave *slave)
@@ -117,6 +119,7 @@ u32 AXI32_Interconnect::read(u32 addr, u32 size)
             return i->read(addr, size);
         }
     }
+    reportUnmapped(addr, false);
     return 0;
 }
 
@@ -128,6 +131,30 @@ void AXI32_Interconnect::write(u32 data, u32 addr, u32 size, u32 mask)
             return;
         }
     }
+    reportUnmapped(addr, true);
+}
+
+// A guest that runs off into unmapped space would otherwise spin forever on
+// the 0 that read() returns, with nothing on the console to say why.  Guest
+// visible behaviour is unchanged: this only tells the host what happened.
+void AXI32_Interconnect::reportUnmapped(u32 addr, bool isWrite)
+{
+    for (u32 i = 0; i < unmapped_count; ++i) {
+        if (unmapped_seen[i] == addr)
+            return;                     // already reported this address
+    }
+    if (unmapped_count == UNMAPPED_REPORT_MAX) {
+        if (!unmapped_silenced) {
+            unmapped_silenced = true;
+            cerr << EMU_TAG << "further unmapped accesses are not reported"
+                 << endl;
+        }
+        return;
+    }
+    unmapped_seen[unmapped_count++] = addr;
+    cerr << EMU_TAG << (isWrite ? "write to " : "read from ")
+         << "unmapped address 0x" << hex << addr << dec
+         << " (reads as 0, writes are dropped)" << endl;
 }
 
 // The interconnect has no register file of its own: readw/writew are never
