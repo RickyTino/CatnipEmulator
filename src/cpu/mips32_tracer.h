@@ -8,6 +8,7 @@ class MIPS32_Tracer {
 private:
     ifstream trace_info;
     bool tracer_on;
+    u64  records;      // reference records consumed so far, for diagnostics
 
 public:
     MIPS32_Tracer(string trace_file);

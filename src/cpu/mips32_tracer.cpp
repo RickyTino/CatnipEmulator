@@ -9,6 +9,7 @@ MIPS32_Tracer::MIPS32_Tracer(string trace_file)
         cerr << EMU_TAG << "warning: cannot open golden trace '" << trace_file
              << "'; the functional test will not be checked" << endl;
     tracer_on = true;
+    records = 0;
 }
 
 MIPS32_Tracer::~MIPS32_Tracer()
@@ -38,6 +39,8 @@ void MIPS32_Tracer::trace(u32 pc, u32 wraddr, u32 wrdata)
     if (!(trace_info >> hex >> temp >> trace_pc >> trace_wraddr >> trace_wrdata))
         return;
 
+    ++records;
+
     if(!tracer_on) return;
     
     if (pc != trace_pc || wraddr != trace_wraddr || wrdata != trace_wrdata) {
@@ -50,8 +53,12 @@ void MIPS32_Tracer::trace(u32 pc, u32 wraddr, u32 wrdata)
              << ", wb_rf_wnum = 0x" << hex << wraddr
              << ", wb_rf_wdata = 0x" << hex << wrdata << endl;
         cout << "--------------------------------------------------------------" << endl;
-        
-        // Infinite Loop
-        while(true);
+
+        // Fail instead of spinning: from the outside a hang looks exactly like
+        // a slow test, and the record index is the quickest way to the
+        // offending instruction.
+        cerr << EMU_TAG << "trace mismatch at record " << dec << records
+             << " (mycpu PC = 0x" << hex << pc << ")" << endl;
+        exit(1);
     }
 }
