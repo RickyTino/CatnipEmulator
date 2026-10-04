@@ -19,19 +19,20 @@ private:
     u32  inst;
     u32  gpr[32];
 
-    // HI/LO are the two halves of one 64-bit MULT/DIV result.  A union expresses
-    // that aliasing directly, instead of punning a u32* through &hilo, which
-    // breaks strict aliasing and can be miscompiled at -O2.
-    union {
-        u64 hilo;
-        u32 hilo_half[2];   // [0] = LO, [1] = HI (little-endian layout)
-    };
-    u32  &hi = hilo_half[1];
-    u32  &lo = hilo_half[0];
+    // HI/LO are the two halves of one 64-bit MULT/DIV result (which MULT,
+    // MADD/MSUB, DIV and the MFHI/MFLO/MTHI/MTLO moves all share).  Plain u32
+    // members plus a 64-bit accessor, rather than a union aliased through
+    // reference members: the references made the class non-assignable, and
+    // hilo_half[0] == LO baked the host byte order into the layout.
+    u32  hi;
+    u32  lo;
+
+    u64  hilo() const { return ((u64)hi << 32) | lo; }
+    void setHilo(u64 v) { lo = (u32)v; hi = (u32)(v >> 32); }
+
     bool llbit;
     bool branch_flag;
     bool branch_taken;
-    bool clearDelaySlot;
     u32  branch_addr;
     bool inDelaySlot;
     bool exception_flag;
@@ -42,10 +43,8 @@ private:
     u32  fetch(u32 addr);
     void execute(u32 inst);
 
-    void exception(Exception e, u32 info = 0, bool save = false);
-    // void branch(bool cond, bool link, bool likely, u32 addr);
+    void exception(Exception e, u32 info = 0, bool isStore = false);
     void branch(bool cond, u32 addr, bool likely, u32 link_reg = 0);
-    // void branch_link(bool cond, bool likely, u32 addr, u32 link_reg);
     void renewpc();
 
     void writeGPR(u32 regaddr, u32 data);  // Don't write gpr[0]
@@ -59,9 +58,7 @@ private:
     void store_ual(u32 reg, u32 vaddr, bool left);
     void load_link(u32 reg, u32 vaddr);
     void store_cond(u32 reg, u32 vaddr);
-    // void multiply(u32 rs, u32 rt, bool isSigned);
     void divide(u32 rs, u32 rt, bool isSigned);
-    // bool intOverflow(s32 a, s32 b);
     void add_CheckOv(s32 a, s32 b, u32 rd);
     void sub_CheckOv(s32 a, s32 b, u32 rd);
     u32  clz(u32 a);

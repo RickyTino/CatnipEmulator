@@ -40,7 +40,8 @@ void MIPS32_Core::reset()
     pc = 0;
     for (u32 i = 0; i < 32; ++i)
         gpr[i] = 0;
-    hilo = 0;
+    hi = 0;
+    lo = 0;
     llbit = false;
     branch_flag = false;
     branch_taken = false;
@@ -74,9 +75,7 @@ void MIPS32_Core::cycle()
     exception_flag = false;
 
     // Renew PC
-    // pc = nextpc;
     renewpc();
-    // nextpc = pc + 4;
 
     // CP0 cycle
     cp0.cycle();
@@ -108,7 +107,11 @@ void MIPS32_Core::cycle()
 
 bool* MIPS32_Core::get_irq(u32 irq_num)
 {
-    if(irq_num > 7) return NULL;
+    // irq_num is the interrupt line as the SoC names it (CP0 Cause.IPn), i.e.
+    // 2..7 map onto irq[0..5].  The lower bound has to be checked as well:
+    // with an unsigned irq_num, 0/1 would wrap in the subtraction below and
+    // hand out a pointer outside cp0.irq[].
+    if (irq_num < 2 || irq_num > 7) return NULL;
     return &(cp0.irq[irq_num - 2]);
 }
 
@@ -147,9 +150,13 @@ void MIPS32_Core::execute(u32 inst)
     u32 j_offset = bitPart(inst, 25,  0);
     u32 sel      = bitPart(inst,  2,  0);
 
-    u32 b_target = pc + (simme << 2) + 4;
+    // Targets and the load/store effective address are formed in u32
+    // arithmetic: shifting a negative s32 (simme << 2) or adding two signed
+    // values that overflow is UB in C++, and this runs for every branch and
+    // every memory access.
+    u32 b_target = pc + ((u32)simme << 2) + 4;
     u32 j_target = (pc & 0xF0000000) | (j_offset << 2);
-    u32 vaddr    = (s32)gpr[rs] + simme;
+    u32 vaddr    = gpr[rs] + (u32)simme;
 
     switch (opcode) {
         case OP_SPECIAL:
@@ -171,8 +178,8 @@ void MIPS32_Core::execute(u32 inst)
                 case SP_MTHI:    hi = gpr[rs]; break;
                 case SP_MFLO:    writeGPR(rd, lo); break;
                 case SP_MTLO:    lo = gpr[rs]; break;
-                case SP_MULT:    hilo = (s64)(s32)gpr[rs] * (s64)(s32)gpr[rt]; break;
-                case SP_MULTU:   hilo = (u64)gpr[rs] * (u64)gpr[rt]; break;
+                case SP_MULT:    setHilo((u64)((s64)(s32)gpr[rs] * (s64)(s32)gpr[rt])); break;
+                case SP_MULTU:   setHilo((u64)gpr[rs] * (u64)gpr[rt]); break;
                 case SP_DIV:     divide(rs, rt, true); break;
                 case SP_DIVU:    divide(rs, rt, false); break;
                 case SP_ADD:     add_CheckOv(gpr[rs], gpr[rt], rd); break;
@@ -253,7 +260,17 @@ void MIPS32_Core::execute(u32 inst)
             }
             break;
 
-        case OP_COP1:  exception(RESVINST); break; // exception(CP_UNUSABLE, 1); break;
+        // RI, deliberately - do not "fix" this to CpU.  The golden trace
+        // (tb/soft/func) drives this encoding into the test program's
+        // "reserved instruction" handler, and raising CpU instead makes
+        // "nscscc_tests func" fail at trace record 86034 (reference enters
+        // reserved_inst_ex at 0xbfc0058c, we end up at 0xbfc00624).  The RTL
+        // disagrees: Decode.v leaves instvalid clear for OP_COP1 (so RI is
+        // pending) while raising exc_cpu, and Exception.v's casez gives CpU
+        // (bit 6) priority over RI (bit 7), so MangoMIPS32 reports CpU here.
+        // Where the trace and the RTL conflict, the trace wins - it is what
+        // this emulator is graded against.
+        case OP_COP1:  exception(RESVINST); break;
         case OP_COP2:  exception(CP_UNUSABLE, 2); break;
         case OP_COP3:  exception(CP_UNUSABLE, 3); break;
         case OP_BEQL:  branch(gpr[rs] == gpr[rt], b_target, 1); break;
@@ -273,10 +290,10 @@ void MIPS32_Core::execute(u32 inst)
                 // MUL writes the low 32 bits of the signed product to rd and
                 // leaves HI/LO untouched (MIPS32 SPECIAL2; Decode.v SP2_MUL).
                 case SP2_MUL:   writeGPR(rd, (u32)((s64)(s32)gpr[rs] * (s64)(s32)gpr[rt])); break;
-                case SP2_MADD:  hilo += (s64)(s32)gpr[rs] * (s64)(s32)gpr[rt]; break;
-                case SP2_MADDU: hilo += (u64)gpr[rs] * (u64)gpr[rt]; break;
-                case SP2_MSUB:  hilo -= (s64)(s32)gpr[rs] * (s64)(s32)gpr[rt]; break;
-                case SP2_MSUBU: hilo -= (u64)gpr[rs] * (u64)gpr[rt]; break;
+                case SP2_MADD:  setHilo(hilo() + (u64)((s64)(s32)gpr[rs] * (s64)(s32)gpr[rt])); break;
+                case SP2_MADDU: setHilo(hilo() + (u64)gpr[rs] * (u64)gpr[rt]); break;
+                case SP2_MSUB:  setHilo(hilo() - (u64)((s64)(s32)gpr[rs] * (s64)(s32)gpr[rt])); break;
+                case SP2_MSUBU: setHilo(hilo() - (u64)gpr[rs] * (u64)gpr[rt]); break;
                 case SP2_CLO:   writeGPR(rd, clz(~gpr[rs])); break;
                 case SP2_CLZ:   writeGPR(rd, clz(gpr[rs])); break;
                 default: exception(RESVINST); break;
@@ -310,42 +327,6 @@ void MIPS32_Core::execute(u32 inst)
         default: exception(RESVINST); break;
     };
 }
-
-// void MIPS32_Core::exception(Exception e)
-// {
-
-//     if (exception_flag && e > exception_type)
-//         return;
-//     exception_flag = true;
-//     branch_taken = false; // ! Observer if it is needed
-//     exception_type = e;
-//     cp0.exception(e);
-
-//     u32 exc_pc;
-//     bool bev = cp0.Status_BEV();
-//     bool iv  = cp0.Cause_IV();
-//     bool exl = cp0.Status_EXL();
-//     u32 exc_vector_base = bev ? 0xbfc00200 : 0x80000000;
-//     switch (e) {
-//         case INTERRUPT:
-//             if (iv)  exc_pc = exc_vector_base + 0x200;
-//             else    exc_pc = exc_vector_base + 0x180;
-//             break;
-        
-//         case I_TLBR:
-//         case D_TLBRL:
-//         case D_TLBRS:
-//             if (exl) exc_pc = exc_vector_base;
-//             else    exc_pc = exc_vector_base + 0x180;
-        
-//         case ERET:
-//             exc_pc = cp0.Status_ERL() ? cp0.read(ERROREPC) : cp0.read(EPC);
-
-//         default:
-//             exc_pc = exc_vector_base + 0x180;
-//     };
-//     nextpc = exc_pc;
-// }
 
 void MIPS32_Core::exception(Exception e, u32 info, bool isStore)
 {
@@ -398,15 +379,8 @@ void MIPS32_Core::exception(Exception e, u32 info, bool isStore)
     nextpc = exc_pc;
 
     cp0.exception(e, pc, info, isStore, inDelaySlot);
-    
-//    cout << "Exception: " << e << endl
-//         << "PC: " << hex << pc << endl
-//         << "Info: " << info << endl
-//         << "EPC: " << cp0.read(CP0_EPC) << endl;
-//    if(inDelaySlot) cout << "In Delay Slot!" << endl; 
 }
 
-// void MIPS32_Core::branch(bool cond, bool link, bool likely, u32 addr)
 void MIPS32_Core::branch(bool cond, u32 addr, bool likely, u32 link_reg)
 {
     branch_flag = true; 
@@ -415,7 +389,15 @@ void MIPS32_Core::branch(bool cond, u32 addr, bool likely, u32 link_reg)
         branch_addr = addr;
     }
     else if (likely) {
+        // Nullified delay slot: execution resumes at pc + 8, so the
+        // instruction fetched from there is NOT in a delay slot.  Clearing
+        // branch_flag keeps renewpc() from marking it as one - otherwise an
+        // exception there reports EPC = pc - 4 with Cause.BD = 1, off by one
+        // instruction.  MangoMIPS32 gets the same effect from Decode.v's
+        // clrslot, which turns the nullified slot into a nop in IF/ID
+        // (Reg_IF_ID.v) so the next instruction is no longer marked as a slot.
         nextpc = pc + 8;
+        branch_flag = false;
     }
     writeGPR(link_reg, pc + 8);
 }
@@ -604,31 +586,33 @@ void MIPS32_Core::store_cond(u32 reg, u32 vaddr)
     writeGPR(reg, (u32)llbit);
 }
 
-// void MIPS32_Core::multiply(u32 rs, u32 rt, bool isSigned)
-// {
-//     if (isSigned)
-//         hilo = (s64)(s32)gpr[rs] * (s64)(s32)gpr[rt];
-//     else
-//         hilo = (u64)gpr[rs] * (u64)gpr[rt];
-// }
-
 void MIPS32_Core::divide(u32 rs, u32 rt, bool isSigned)
 {
+    // A zero divisor produces HI = LO = 0 and raises nothing: MangoMIPS32
+    // Divider.v diverts to its DivByZero state, whose all-zero dividend is what
+    // ends up in the 64-bit result.  Without this guard the host's idiv traps
+    // and takes the whole emulator down with SIGFPE - reachable from any guest
+    // code, since the MIPS32 spec leaves the result UNPREDICTABLE rather than
+    // undefined.
+    if (gpr[rt] == 0) {
+        hi = 0;
+        lo = 0;
+        return;
+    }
     if (isSigned) {
-        lo = (s32)gpr[rs] / (s32)gpr[rt];
-        hi = (s32)gpr[rs] % (s32)gpr[rt];
+        // Divide sign-extended operands in 64 bits: -2^31 / -1 is the single
+        // case whose 32-bit result overflows, and it is the other input that
+        // traps the host.  Divider.v divides magnitudes and negates the two
+        // results, which agrees with this.
+        s64 a = (s32)gpr[rs], b = (s32)gpr[rt];
+        lo = (u32)(a / b);
+        hi = (u32)(a % b);
     }
     else {
         lo = gpr[rs] / gpr[rt];
         hi = gpr[rs] % gpr[rt];
     }
 }
-
-// bool MIPS32_Core::intOverflow(s32 a, s32 b)
-// {
-//     s32 c = a + b;
-//     return (a >= 0 && b >= 0 && c < 0) || (a < 0)&&(b < 0)&&(c >= 0);
-// }
 
 void MIPS32_Core::add_CheckOv(s32 a, s32 b, u32 rd)
 {
