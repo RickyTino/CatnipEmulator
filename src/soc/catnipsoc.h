@@ -5,12 +5,14 @@
 #include "axi.h"
 #include "mips32_core.h"
 #include "uart16550.h"
+#include "ethernetlite.h"
 
-// Minimal CatnipSoC: just CPU + memory + bootrom + uart16550, no golden-trace
-// tracer.  The physical map follows CatnipSoC
+// Minimal CatnipSoC: just CPU + memory + bootrom + uart16550 + ethernetlite,
+// no golden-trace tracer.  The physical map follows CatnipSoC
 // (arch/mips/boot/dts/catnipsoc/catnipsoc.dts):
 //   0x00000000..0x07FFFFFF  memory   (128MB)
 //   0x10400000..0x1040FFFF  uart16550 (DT reg-offset 0x1000)
+//   0x10E00000..0x10E0FFFF  ethernetlite
 //   0x1FC00000..0x1FCFFFFF  bootrom  (1MB, MIPS reset vector 0xBFC00000)
 // Everything else reads as 0 / ignores writes.
 #define CATNIPSOC_MEM_BASE    0x00000000
@@ -21,6 +23,9 @@
 #define CATNIPSOC_UART_LEN    0x10000
 #define CATNIPSOC_UART_OFFSET 0x1000                // DT reg-offset
 #define CATNIPSOC_UART_IRQ    2                     // DT interrupts = <2> -> IP2
+
+#define CATNIPSOC_ETH_BASE    0x10E00000
+#define CATNIPSOC_ETH_LEN     0x10000
 
 #define CATNIPSOC_BOOT_BASE   0x1FC00000
 #define CATNIPSOC_BOOT_WIDTH  20                    // 1 << 20 = 1MB
@@ -36,6 +41,7 @@ private:
     AXI32_RAM memory;
     AXI32_RAM bootrom;
     UART16550 uart;
+    EthernetLite eth;
 
 public:
     CatnipSoC();

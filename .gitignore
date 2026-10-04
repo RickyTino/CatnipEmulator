@@ -5,6 +5,7 @@ build/
 /cemu
 /tb/nscscc_tests
 /tb/uart_test
+/tb/eth_test
 
 # Editor / scratch
 .vscode/

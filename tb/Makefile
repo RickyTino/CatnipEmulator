@@ -10,6 +10,7 @@
 #   make -C tb nscscc-perf   NSCSCC performance benchmark (prompts for a switch value)
 #   make -C tb nscscc-tlb    NSCSCC TLB test
 #   make -C tb uart-test     uart16550 self-test
+#   make -C tb eth-test      xps-ethernetlite self-test
 #
 # nscscc-func never exits by itself (the guest spins once it is done) - Ctrl-C.
 #
@@ -21,14 +22,16 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
 
 NSCSCC   ?= ./tb/nscscc_tests
 UARTSELF ?= ./tb/uart_test
+ETHSELF  ?= ./tb/eth_test
 
-.PHONY: help nscscc-func nscscc-perf nscscc-tlb uart-test
+.PHONY: help nscscc-func nscscc-perf nscscc-tlb uart-test eth-test
 
 help:
 	@echo "make -C tb nscscc-func   NSCSCC functional test (golden trace)"
 	@echo "make -C tb nscscc-perf   NSCSCC performance benchmark"
 	@echo "make -C tb nscscc-tlb    NSCSCC TLB test"
 	@echo "make -C tb uart-test     uart16550 self-test"
+	@echo "make -C tb eth-test      xps-ethernetlite self-test"
 
 nscscc-func:
 	cd $(ROOT) && $(NSCSCC) func
@@ -41,3 +44,6 @@ nscscc-tlb:
 
 uart-test:
 	cd $(ROOT) && $(UARTSELF)
+
+eth-test:
+	cd $(ROOT) && $(ETHSELF)

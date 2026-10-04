@@ -113,13 +113,25 @@ AXI Quad SPI 的 `C_TYPE_OF_AXI4_INTERFACE=1`，且它的 AXI4-Lite 控制口**�
 |---|---|---|
 | 写 TSR 置 `BUSY\|ACTIVE`(0x80000001) | 按 TPLR 长度从 ping/pong 缓冲取帧发出去；完成后**清 BUSY、保留 ACTIVE** | 驱动用 `(TSR & (BUSY\|ACTIVE))==0` 判缓冲可用；两个位都清则 `xemaclite_interrupt` 永远看不到 `BUSY==0 && ACTIVE!=0` → `netif_wake_queue` 不调用 → tx 队列卡死 |
 | 写 TSR 置 `BUSY\|PROGRAM`(0x3) | 从缓冲取 6 字节 MAC 记下，**清掉 bit0/bit1**，不发送 | `xemaclite_update_address` 的 `while (TSR & 0x3);` 死循环（u-boot 与内核都会走这里）|
-| 收到帧 | 写进当前 RX 缓冲、写 RPLR 长度、置 `RSR = RECV_IE(0x8)\|RECV_DONE(0x1)`、按需拉中断 | 内核靠 `RSR & 0x1` 判有帧；**帧长是靠帧内 EtherType 推的**，所以必须写完整以太帧（含 14 字节头） |
+| 收到帧 | 写进当前 RX 缓冲、置 `RSR = RECV_IE(0x8)\|RECV_DONE(0x1)`、按需拉中断 | 内核靠 `RSR & 0x1` 判有帧；**帧长是靠帧内 EtherType 推的**，所以必须写完整以太帧（含 14 字节头） |
 | 写 RSR 清 `RECV_DONE` | 该缓冲置空，可装下一帧 | 缓冲被占死，只收得到一帧 |
 | 中断输出 | `GIER.GIE(0x80000000) && ((RSR.RECV_DONE && RSR.RECV_IE) \|\| (TSR 可发送 && TSR.XMIT_IE))` | Linux 完全收不到包（它没有 NAPI/轮询路径，`xemaclite_interrupt` 是唯一收取路径） |
-| MDIO 事务 | 写 `MDIOCTRL.bit0(MDIOSTS)` 启动，**同步完成并自清该位**；`MDIOADDR.bit10=1` 为读，结果放 `MDIORD`；`MDIOCTRL.bit3(MDIOEN)` 必须能读回 | u-boot `mdio_wait` 等 MDIOSTS 变 0（超时 2000ms），不自清直接探测失败 |
-| PHY 探测 | `BMSR` 满足 u-boot 掩码 `(v & 0x1808) == 0x1808`；PHYID 非 0xFFFF | u-boot 会判定"无 PHY"，内核 genphy/smsc 也绑定不上 |
+| MDIO 事务 | 写 `MDIOCTRL.bit0(MDIOSTS)` 启动，**同步完成并自清该位**；`MDIOADDR.bit10=1` 为读，结果放 `MDIORD`；`MDIOCTRL.bit3(MDIOEN)` 必须能读回且事务中保留；**复位后 bit0 必须是 0** | u-boot `mdio_wait` 等 MDIOSTS 变 0（超时 2000ms），不自清直接探测失败；内核 `xemaclite_mdio_wait` 同理但超时只有 2 jiffies，复位后 bit0 非 0 会**立刻**超时 |
+| PHY 探测 | `BMSR` 满足 u-boot 掩码 `(v & 0x1808) == 0x1808`；PHYID 非 0xFFFF **且非 0**（内核 `get_phy_device` 把 0 与 0xFFFFFFFF 都判成"无 PHY"） | u-boot 判定"无 PHY"；内核更严重：`xemaclite_open()` 直接 `-ENODEV` → **eth0 连 up 都 up 不起来**（不是"能 up 但没 carrier"） |
+
+> **没有 RPLR 寄存器（2026-10-05 核查，步骤 1.3）**：内核头把 `XEL_RPLR_OFFSET` 定义成 `0x100C`，但它**从未被使用**（全文只在定义那一处出现）；u-boot 的 `struct emaclite_regs` 里也没有对应字段（0x17E4 被并进 `reserved4`）。内核真正读长度靠 `addr + XEL_HEADER_OFFSET(12) + XEL_RXBUFF_OFFSET(0x1000)`，即 **RX 缓冲 + 帧内偏移 12**（EtherType）。所以 `0x100C` 属于接收缓冲、**emu 不建模 RPLR**；若把它当寄存器实现，驱动读 EtherType 会读到 0、内核推不出包长。
 
 **u-boot 与内核的差异**：u-boot 只认 `1.00.a`、**纯轮询**（读 TSR/RSR，不用中断）；内核认到 `3.00.a`、**RX 完全依赖中断**。→ 先用 u-boot 验证寄存器语义，再引入 INTC。
+
+**内核 MDIO 事务的确切时序**（`xilinx_emaclite.c:737-810`，模型按这个写就够）：`wait(MDIOSTS==0)` → 读回 `MDIOCTRL`（为了保留 `MDIOEN`）→ 写 `MDIOADDR = OP<<10 | phy<<5 | reg`（读 OP=1，写 OP=0）→ 只写事务才写 `MDIOWR` → 写 `MDIOCTRL = 读回值 | MDIOSTS`（**这一步就是"启动"**：模型在此把活干完并把 bit0 留成 0）→ `wait(MDIOSTS==0)` → 只读事务才读 `MDIORD`。
+
+**PHY 绑定哪个驱动只看 ID**：DT 的 `phy@1` 没有 `compatible`，所以 `of_mdiobus_register` 拿 ID 去匹配；本内核只内置一个具体驱动（`.config` 里 `CONFIG_SMSC_PHY=y`，另有 `FIXED_PHY`/`SWPHY`），**ID 不被认领时 phylib 回退通用驱动**（`phy_device.c:1300-1303`，注释原文 "Assume that if there is no driver, that it doesn't exist, and we should use the genphy driver"）。这直接决定 §5.3 选哪个 ID —— 见 §10。
+
+**实测可用的一组 PHY 响应**（QEMU 侧 2026-10-05，已验证到 `Link is Up - 100Mbps/Full`）：`PHYID1=0x2000`/`PHYID2=0x5C90`（不被任何内置驱动认领）、`BMSR=0x786D`（10/100 双工 + link up + aneg complete）、`ANAR=ANLPAR=0x01E1`；`BMCR` 的 bit15(RESET)/bit9(RESTART_ANEG) 要自清（驱动写完会读回），`BMSR` 与 `PHYID*` 只读。
+
+- **实测（2026-10-05，步骤 0.2 挂载设备之后）**：u-boot 从复位走到提示符、乃至一次 `ping 10.0.2.2` 尝试，**没有产生任何网卡寄存器访问**。判据：`AXI32_Interconnect::reportUnmapped`（`src/bus/axi.cpp:147`）对每个新地址只报一次，基线里连一条网卡地址的 unmapped 记录都没有 → 确实没访问。`Net: EMACLITE: b0e00000, phyaddr 1, 1/1` 是 DT 里的静态信息，PHY 检测被推迟到 `eth_start`。
+  → 推论：**阶段 1 的行为只能靠 `tb/eth_test` 验证**，`make run` 到提示符对网卡是"零访问"（这正是 u-boot 验收排在 2.4 的原因：要先有能真正发包的后端）。
+- **`ping` 的软件前置**：u-boot 地址没配好时走不到发包，直接 `## Warning: gatewayip needed but not set`（×3）返回。故 2.4 用 `dhcp` 自动配置；若手配 `ipaddr`，**必须同时设 `gatewayip`**。
 
 **SDHCI（arasan 8.9a）**：`drivers/mmc/host/sdhci-of-arasan.c:351`（quirks）、`:543`（`"arasan,sdhci-8.9a"`）。用到的 quirks：
 `SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN`（忽略 CAPS 里的 base clock，用 `clk_xin` = DT 的 50MHz `ext`）、`SDHCI_QUIRK_BROKEN_PRESET_VALUE`（不碰 preset 寄存器）、`CLOCK_DIV_ZERO_BROKEN`、`STOP_WITH_TC`；DT 无 `arasan,soc-ctl-syscon` → **不需要 syscon**。
@@ -191,9 +203,12 @@ UART16550 ────────→ MIPS32_Core::get_irq(2)   (现状，不动
 
 ### 5.3 MdioPhyStub
 
-- `M` MDIO 4 寄存器握手（`MDIOSTS` 同步自清、`MDIOEN` 可读回）。
-- `M` 寄存器桩：`PHYID1=0x0007`、`PHYID2=0xC0F1`（LAN8710/8720 家族，让内核 `smsc.c` 与 u-boot 都能识别）；`BMSR` 置 `LINK_STATUS|ANEG_COMPLETE` 且满足 `(v&0x1808)==0x1808`，锁存位读清；`BMCR`/`ANAR`/`ANLPAR` 报 10/100 全双工 + 自协商。
-- `W` 链路状态与 PHY 中断的配合（见 §9 风险）。
+- `M` MDIO 4 寄存器握手（`MDIOSTS` 同步自清、`MDIOEN` 可读回且事务中保留；**复位后 `MDIOSTS` 为 0**）。
+- `M` 寄存器桩：`BMSR` 置 `LINK_STATUS|ANEG_COMPLETE` 且满足 `(v&0x1808)==0x1808`，锁存位读清；`BMCR`/`ANAR`/`ANLPAR` 报 10/100 全双工 + 自协商（`ANLPAR` 与 `ANAR` 同值即可协商成功）。
+- `M` **至少要能读回** `BMCR(0)`/`BMSR(1)`/`PHYID1(2)`/`PHYID2(3)`/`ANAR(4)`/`ANLPAR(5)`；写只认真处理 `BMCR`/`ANAR`（通用驱动只碰这些）。
+- `W` **ID 选型是个真取舍，见 §10 新增待定项**：原定 `0x0007/0xC0F1` 会绑上内核的 `smsc.c`（它自己还要跑 reset / vendor 寄存器序列）；报一个不被认领的 ID 则走通用驱动，寄存器面只有上面那几个。QEMU 侧用的是一组已验证可用的值（§2.4）。
+- `W` 链路状态与 PHY 中断的配合（见 §9 风险 —— **QEMU 实测：不拉 PHY 中断也能 up**）。
+- 参考实现：QEMU 分支 `catnipsoc` 的 `hw/net/xilinx_ethlite.c`（commit `77a9876`）—— MDIO 4 寄存器 + 一个 PHY 寄存器组，约 110 行，可直接对照。
 
 ### 5.4 Sdhci（阶段 4）
 
@@ -263,9 +278,19 @@ public:
 
 ### 阶段 1：EthernetLite 行为 + MDIO/PHY + 自测
 
-- **1.1** TX 路径：TPLR 取长度、ping/pong 选择、`BUSY|ACTIVE` 触发、完成后"清 BUSY 留 ACTIVE"；先接一个内置回环（`null` 后端不落地文件，先写 `tb/eth_test.cpp` 的桩）。
+- **1.1** TX 路径：TPLR 取长度、ping/pong 选择、`BUSY|ACTIVE` 触发、完成后"清 BUSY 留 ACTIVE"。
+  - 触碰：`src/dev/ethernetlite.{h,cpp}`、`tb/eth_test.cpp`（新建）、`tb/Makefile`
+  - 本步就建**可跑的** `tb/eth_test`（+ `tb/Makefile` 的 `eth-test` 目标），先只覆盖 TX（理由见 §10 决策 10）；1.6 扩到全量。
+  - 帧的去向：**先就地丢弃**，设备内留一个空的投递钩子；阶段 2 再接 `null`/`slirp` 后端。
+  - 验收：`make` 通过；`make -C tb eth-test` 绿（断言 TPLR 长度、ping/pong 交替、触发后 `TSR==ACTIVE`）；`make run` 与改前逐字节一致
 - **1.2** MAC 编程序列（`BUSY|PROGRAM` → 取 6 字节、清 bit0/bit1）。
-- **1.3** RX 路径：写缓冲 + RPLR + `RSR.RECV_DONE`，清位后可复用。
+  - 触碰：`src/dev/ethernetlite.{h,cpp}`、`tb/eth_test.cpp`
+  - 取走的地址存进设备状态并加 `macAddress()` getter（理由见 §10 决策 11）：驱动只写不读，所以它不是数据通路的一部分，但"取走 6 字节"是这步唯一可断言的语义。
+  - 验收：`make -C tb eth-test` 绿（`PROGRAM` 不发帧、两位自清、ping/pong 两侧都能装入地址）；`make run` 与 1.1 逐字节一致
+- **1.3** RX 路径：注入缓冲 + `RSR.RECV_DONE`，清位后可复用（**不建模 RPLR**，理由见 §2.4）。
+  - 触碰：`src/dev/ethernetlite.{h,cpp}`、`tb/eth_test.cpp`
+  - 新增 public `bool receiveFrame(const u8 *frame, u32 len)`（`false` = 两个缓冲都满、帧被丢）；`RSR` 写 = 直接存（驱动拿它做 flush 与 ack）；`ETH_TX_BUF_SIZE` 改名 `ETH_BUF_SIZE`（TX/RX 同尺寸）。
+  - 验收：`make -C tb eth-test` 绿（EtherType 在 0x100C 处可读、DONE 置/清、ping/pong 交替、满时丢弃）；`make run` 与 1.2 逐字节一致
 - **1.4** 中断条件（GIER/IER 位）+ `setIRQLine(bool*)`。
 - **1.5** MDIO 4 寄存器 + `MdioPhyStub`（PHYID/BMSR/BMCR/ANAR/ANLPAR）。
 - **1.6** `tb/eth_test.cpp` 补全 + `Makefile` 新增 `tb/eth_test` + `tb/Makefile` 新增 `eth-test` 入口。
@@ -329,7 +354,8 @@ public:
 | TX 完成位语义 | §2.4 表里的"清 BUSY 留 ACTIVE"，最易踩 | 1.1/1.6 的自测专门断言；u-boot `ping` 会二次暴露 |
 | Linux RX 只有中断路径 | 没有 INTC 则永远收不到包 | 阶段 2 先用 u-boot 轮询验证；阶段 3 才引入 INTC |
 | INTC 中断风暴 | `IVR` 返回非 0xFFFFFFFF、IAR 清了却自己重挂、MER 读不回都会出问题 | `tb/intc_test` 覆盖；一旦风暴，先查 IVR/IAR |
-| PHY 中断导致状态机不轮询 | DT 给 `phy0` 分了 INTC 输入 0（边沿型）；模型从不拉中断时链路可能一直不上 | 在 link up 时置一次 `BMSR` link-change 锁存位并拉一次边沿；退路是让锁存位可读清、驱动自行走到 polling |
+| PHY 中断导致状态机不轮询 | DT 给 `phy0` 分了 INTC 输入 0（边沿型）；模型从不拉中断时链路可能一直不上 | **这条风险已实测降级**（QEMU，2026-10-05）：一次 PHY 中断都没拉，链路照样 `Link is Up` —— phylib 的状态机自己按定时器轮询 `BMSR`。故先按"不拉中断"实现，真不上再补"置一次 link-change 锁存位 + 拉一次边沿" |
+| 没有 PHY 桩 | 内核 `xemaclite_open()` 会返回 `-ENODEV`，**eth0 连 up 都 up 不起来**（比"没 carrier"严重） | PHY 桩不是可选项而是必需项；通过判据就是内核打印 `Link is Up - 100Mbps/Full`（可用值见 §2.4 实测） |
 | 后端依赖/权限 | `libslirp-dev` 本机未安装（无 `.pc`/头文件）；`tap` 需 root | 装依赖前先问你（§10 已记录）；`tap` 暂不做 |
 | slirp 的 ICMP 边界 | 客机 `ping` 公网不通（ICMP echo 出网需特权），只有 `ping 10.0.2.2` 通 | 验收统一按 `ping 10.0.2.2` 写；真需要 ICMP 出网时才考虑 `tap` |
 | M3 的 ssh 验收前提 | 宿主当前没有 sshd 在监听 22（实测） | 步骤 3.3 开工前先确认宿主的 sshd 可用 |
@@ -352,6 +378,10 @@ public:
 8. **`sdcard.img` 用 ext2（2026-09-21 定）**：`catnipsoc_sd_defconfig` 里 `CONFIG_EXT2_FS=y`（1435 行）而 `# CONFIG_EXT4_FS is not set`（1438 行）→ **ext2 零改动可用；ext4 必须破"不改 defconfig"约束**（还要连带 `JBD2`/`MBCACHE`）。ext2 无日志，在"只读 / 写回不完整"的 SD 模型下比 ext4 更稳。分区形态已定（见第 9 条：带 MBR 分区表 + 一个 ext2 分区）；造镜像的命令见步骤 4.4。
 
 9. **`sdcard.img` 带 MBR 分区表 + 一个 ext2 分区（2026-09-21 定）**：即原 B 方案。理由：给"从 SD 启动"（见下「已登记」）留路——主流嵌入式板子的工具链与启动命令都按"设备:分区"寻址，u-boot 在有分区表时可以用标准写法 `mmc 0:1`（无分区表则只能退化成 `mmc 0` / `mmc 0:auto`，见 `disk/part.c:556-577`）；成本只是多两条造镜像命令，且**不需要 root**。布局：扇区 0 = MBR（分区项 1：类型 `0x83`，起始 LBA 2048 即 1MiB 偏移），从 1MiB 起是 ext2 文件系统；镜像总大小 = 1MiB + 分区大小。造法见步骤 4.4。
+
+10. **1.1 提前建可跑的 `tb/eth_test`；TX 帧先丢弃（2026-10-05 定）**。理由：原计划 1.6 才加 `tb/eth_test` 与 `tb/Makefile` 目标，但阶段 1 的约定是"每步都做验收、`make && make -C tb eth-test` 全绿"——不提前建，1.1 就没有行为证据（且 §2.4 实测表明 u-boot 在发包前完全不访问寄存器，无法充当 1.1 的预言机）。故 1.1 建最小可跑版本（先只覆盖 TX），1.6 扩到全量。同时定：1.1 里 TX 完成的帧**先就地丢弃**，设备内留一个空的投递钩子，阶段 2 再接 `null`/`slirp` 后端（避免在阶段 1 引入后端抽象）。
+
+11. **`PROGRAM` 取走的 MAC 存进设备并加 `macAddress()` getter（2026-10-05 定）**。事实：`BUSY|PROGRAM` 的 6 字节地址在**数据通路上无人读取**——两个驱动都只写不读（MAC 来源是 DT，Linux `xilinx_emaclite.c:1158-1173`），而发帧时帧头的源地址已由协议栈填好（`xemaclite_send_data(lp, skb->data, len)`，`:1030`），所以设备内部这份地址转发不转发都一个样。之所以仍然存下来：**"取走 6 字节"是 1.2 唯一可被测试钉住的语义**，只清位会让这步的断言退化成"TSR 归零"。备选方案"只清位、不存"被否（会让 1.2 无实质覆盖）。将来 3.4 的 `--mac` 选项可复用这份状态。
 
 **待定（需要你拍板）**
 截至 2026-09-21，**全部已定、无未决项**：
@@ -380,11 +410,11 @@ public:
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| 0.1 ethernetlite 骨架 | ☐ 未开始 | |
-| 0.2 SoC 常量/挂载 | ☐ 未开始 | |
-| 1.1 TX 路径 | ☐ 未开始 | |
-| 1.2 MAC 编程 | ☐ 未开始 | |
-| 1.3 RX 路径 | ☐ 未开始 | |
+| 0.1 ethernetlite 骨架 | ✅ 完成 | 2026-09-22：新建 `src/dev/ethernetlite.{h,cpp}` + `Makefile` 的 `CEMU_OBJ`；`make` 通过，`make run` 输出与 HEAD 构建逐字节一致（`diff` IDENTICAL） |
+| 0.2 SoC 常量/挂载 | ✅ 完成 | 2026-10-05：`catnipsoc.{h,cpp}` 加 `CATNIPSOC_ETH_BASE/LEN`、成员 `eth`、`addSlave`、`SOC_REGIONS` 行；`make run` 与 0.1 逐字节一致；`regionName(0x10E00000)` = `ethernetlite`。实测：u-boot 到提示符乃至一次 `ping` 尝试都**没有**访问寄存器（unmapped 警告一个都没出现） |
+| 1.1 TX 路径 | ✅ 完成 | 2026-10-05：TX 状态机（TPLR 取长、ping/pong 各自独立、`BUSY` 触发后清 BUSY 留其余位）+ 帧缓冲读写；新建 `tb/eth_test`（19 断言全绿）+ `tb/Makefile` 的 `eth-test`；`make run` 与 0.2 逐字节一致。测试当场抓出「字缓冲须按 4 字节对齐取字」这个基类约定 |
+| 1.2 MAC 编程 | ✅ 完成 | 2026-10-05：`BUSY|PROGRAM` → 取该方向缓冲前 6 字节存入 `mac[6]`（新增 `macAddress()`，理由见 §10 决策 11）+ 清 `bit0|bit1`；`tb/eth_test` 21 断言全绿；`make run` 与 1.1 逐字节一致 |
+| 1.3 RX 路径 | ✅ 完成 | 2026-10-05：RX 缓冲读写 + `RSR` + `bool receiveFrame()`（ping/pong 交替、满则丢）；**修掉 0.1 的错宏**：`0x100C` 是 RX 缓冲内 EtherType 偏移、不是 RPLR 寄存器（§2.4 已补核查）；`ETH_TX_BUF_SIZE`→`ETH_BUF_SIZE`；`tb/eth_test` 34 断言全绿；`make run` 与 1.2 逐字节一致 |
 | 1.4 中断条件 | ☐ 未开始 | |
 | 1.5 MDIO + PHY 桩 | ☐ 未开始 | |
 | 1.6 tb/eth_test | ☐ 未开始 | |
