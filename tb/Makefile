@@ -11,6 +11,8 @@
 #   make -C tb nscscc-tlb    NSCSCC TLB test
 #   make -C tb uart-test     uart16550 self-test
 #   make -C tb eth-test      xps-ethernetlite self-test
+#   make -C tb corner        guest-assembly corner-case tests (tb/soft/corner)
+#   make -C tb soft-corner   reassemble those guest images (needs mipsel binutils)
 #
 # nscscc-func never exits by itself (the guest spins once it is done) - Ctrl-C.
 #
@@ -23,8 +25,9 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
 NSCSCC   ?= ./tb/nscscc_tests
 UARTSELF ?= ./tb/uart_test
 ETHSELF  ?= ./tb/eth_test
+CORNER   ?= ./tb/corner_tests
 
-.PHONY: help nscscc-func nscscc-perf nscscc-tlb uart-test eth-test
+.PHONY: help nscscc-func nscscc-perf nscscc-tlb uart-test eth-test corner soft-corner
 
 help:
 	@echo "make -C tb nscscc-func   NSCSCC functional test (golden trace)"
@@ -32,6 +35,8 @@ help:
 	@echo "make -C tb nscscc-tlb    NSCSCC TLB test"
 	@echo "make -C tb uart-test     uart16550 self-test"
 	@echo "make -C tb eth-test      xps-ethernetlite self-test"
+	@echo "make -C tb corner        guest-assembly corner-case tests"
+	@echo "make -C tb soft-corner   reassemble the corner-test guest images"
 
 nscscc-func:
 	cd $(ROOT) && $(NSCSCC) func
@@ -47,3 +52,11 @@ uart-test:
 
 eth-test:
 	cd $(ROOT) && $(ETHSELF)
+
+corner:
+	cd $(ROOT) && $(CORNER)
+
+# The guest images are checked in, so this is only needed after editing a .s
+# under tb/soft/corner/.
+soft-corner:
+	$(MAKE) -C $(ROOT)/tb/soft/corner

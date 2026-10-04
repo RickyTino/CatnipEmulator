@@ -1,11 +1,13 @@
 # CatnipEmulator
 #
 # Build:
-#   make                 build ./cemu, tb/nscscc_tests, tb/uart_test, tb/eth_test
+#   make                 build ./cemu, tb/nscscc_tests, tb/uart_test,
+#                        tb/eth_test, tb/corner_tests
 #   make cemu            the CatnipSoC emulator (loads and runs images)
 #   make nscscc_tests    NSCSCC contest test harness (func/perf/tlb)
 #   make uart_test       standalone uart16550 self-test
 #   make eth_test        standalone xps-ethernetlite self-test
+#   make corner_tests    guest-assembly corner cases (see tb/soft/corner)
 #   make clean
 #   make OPT=-O0         build without optimization (for debugging)
 #   make OS_IS_WINDOWS=1 build the Windows console-colour path
@@ -43,6 +45,7 @@ CEMU = cemu
 NSC  = tb/nscscc_tests
 UART = tb/uart_test
 ETH  = tb/eth_test
+CORNER = tb/corner_tests
 
 CEMU_OBJ = $(call objs,main catnipsoc image_loader axi mips32_core \
                        mips32_cp0 mips32_tlb mips32_tracer uart16550 \
@@ -51,10 +54,12 @@ NSC_OBJ  = $(call objs,nscscc_tests image_loader axi mips32_core \
                        mips32_cp0 mips32_tlb mips32_tracer)
 UART_OBJ = $(call objs,uart_test uart16550 axi)
 ETH_OBJ  = $(call objs,eth_test ethernetlite axi)
+CORNER_OBJ = $(call objs,corner_tests image_loader axi mips32_core \
+                         mips32_cp0 mips32_tlb mips32_tracer)
 
-.PHONY: all clean nscscc_tests uart_test eth_test
+.PHONY: all clean nscscc_tests uart_test eth_test corner_tests
 
-all: $(CEMU) $(NSC) $(UART) $(ETH)
+all: $(CEMU) $(NSC) $(UART) $(ETH) $(CORNER)
 
 # Short aliases for the binaries that live in tb/.  ("cemu" is a file target at
 # the root already, so "make cemu" needs no alias - and it must not be listed
@@ -64,6 +69,8 @@ nscscc_tests: $(NSC)
 uart_test: $(UART)
 	@:
 eth_test: $(ETH)
+	@:
+corner_tests: $(CORNER)
 	@:
 
 $(CEMU): $(CEMU_OBJ)
@@ -78,15 +85,19 @@ $(UART): $(UART_OBJ)
 $(ETH): $(ETH_OBJ)
 	$(CPP) $^ -o $@ $(LDFLAGS)
 
+$(CORNER): $(CORNER_OBJ)
+	$(CPP) $^ -o $@ $(LDFLAGS)
+
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(BUILD)
 	$(CPP) -c $< -o $@ $(CXXFLAGS)
 
 clean:
-	$(RM) -r $(BUILD) $(CEMU) $(NSC) $(UART) $(ETH)
+	$(RM) -r $(BUILD) $(CEMU) $(NSC) $(UART) $(ETH) $(CORNER)
 
 # Auto-generated header dependencies (-MMD -MP).  Harmless if not present yet.
--include $(CEMU_OBJ:.o=.d) $(NSC_OBJ:.o=.d) $(UART_OBJ:.o=.d) $(ETH_OBJ:.o=.d)
+-include $(CEMU_OBJ:.o=.d) $(NSC_OBJ:.o=.d) $(UART_OBJ:.o=.d) $(ETH_OBJ:.o=.d) \
+         $(CORNER_OBJ:.o=.d)
 
 # ---------------------------------------------------------------------------
 # Run: SoC boots.  Default images are the ones in this workspace; paths are

@@ -6,6 +6,7 @@ build/
 /tb/nscscc_tests
 /tb/uart_test
 /tb/eth_test
+/tb/corner_tests
 
 # Editor / scratch
 .vscode/
@@ -37,3 +38,8 @@ tb/soft/**/obj/**/main.elf
 # Our own legacy TLB test: keep the sources (test.S, ram.ld, convert.py,
 # Makefile), ignore the build products.
 tb/legacy/tlb_test/tlb_test.*
+
+# Guest programs for tb/corner_tests (tb/soft/corner).  The assembled images
+# are what that harness stages at run time, so they stay tracked like the three
+# ELF images above - only the assembler's .o files are ignored (by *.o).
+!tb/soft/corner/*.bin
