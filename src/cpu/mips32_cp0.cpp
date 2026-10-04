@@ -122,7 +122,18 @@ u32 MIPS32_CP0::read(u32 reg)
         case CP0_EPC:      res = epc; break;
         case CP0_PRID:     res = 0x00018000; break;    // Mango CP0.v PrId
         case CP0_CONFIG:   res = 0x80000080 | config_k0; break; // MT=001 TLB
-        case CP0_CONFIG1:  res = (31u << 25) | (5u << 19) | (5u << 10); break;
+        case CP0_CONFIG1:
+            // Same fields as CP0.v's Config1: MMU size - 1 plus the I/D cache
+            // line-size fields from Config.v (ICache_N = DCache_N = 2, so
+            // IS = DS = 1).  This kernel's decode_config1() reads only
+            // MD/PC/WR/CA/EP/FP/TLBS, so IS/DS are cosmetic - but 0 was a
+            // silent deviation from the RTL.
+            res = (31u << 25)       // 30:25 MMUSize-1 = 31 -> 32 entries
+                | (1u  << 22)       // 24:22 IS = ICache_N - 1
+                | (5u  << 19)       // 21:19 IL = 5 (64B)
+                | (1u  << 13)       // 15:13 DS = DCache_N - 1
+                | (5u  << 10);      // 12:10 DL = 5 (64B)
+            break;
         case CP0_TAGLO:    res = taglo; break;
         case CP0_TAGHI:    res = taghi; break;
         case CP0_ERROREPC: res = errorepc; break;

@@ -24,6 +24,10 @@ inline u32 bitPart(u32 a, u32 msb, u32 lsb)
 }
 
 // bitConcat: Verilog " {a, b[b_width-1:0]}[31:0] ".
+// b is masked down to b_width bits, but a is only shifted: its bits above
+// (31 - b_width) are dropped rather than folded, so callers must pass a value
+// that already fits (slice it with bitPart() first when translating an
+// explicitly sized Verilog concatenation).
 inline u32 bitConcat(u32 a, u32 b_width, u32 b)
 {
     if (b_width >= 32)
