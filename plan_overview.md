@@ -128,6 +128,7 @@
 | M2 之后：网络通不通 | `make run` → u-boot 里 `dhcp` → `ping 10.0.2.2`；取文件 `tftpboot 0x81000000 <文件名>` |
 | M3 之后：Linux 网络 | 进 Linux 后 `ifconfig eth0 up`、`ping 10.0.2.2`、`ssh 10.0.2.2` |
 | M5 之后：SD 卡 | 进 Linux 后 `lsblk`（看 `mmcblk0` + `mmcblk0p1`）、`dd if=/dev/mmcblk0p1 ...`、`mount /dev/mmcblk0p1` |
+| 想对照 QEMU 的参考实现 | 分支 `catnipsoc`（`~/workspace/qemu-9.0`）：`hw/net/xilinx_ethlite.c`（MDIO+PHY，`77a9876`）+ `hw/mips/catnipsoc.c`（INTC/网口接线）。已实测的判据：内核打印 `Link is Up - 100Mbps/Full`，客机 `ping 10.0.2.2` 0% 丢包 |
 
 ---
 
