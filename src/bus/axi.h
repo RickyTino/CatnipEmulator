@@ -41,8 +41,6 @@ private:
     bool unmapped_silenced;
 
 private:
-    // u8 readb(u32 addr);
-    // void writeb(u8 data, u32 addr);
     u32 readw(u32 addr);
     void writew(u32 data ,u32 addr, u32 mask);
     void reportUnmapped(u32 addr, bool isWrite);
@@ -63,8 +61,6 @@ private:
     u32 addrMask;
 
 private:
-    // u8 readb(u32 addr);
-    // void writeb(u8 data, u32 addr);
     u32 readw(u32 addr);
     void writew(u32 data, u32 addr, u32 mask);
 

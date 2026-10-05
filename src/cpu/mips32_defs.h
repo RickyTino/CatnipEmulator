@@ -172,26 +172,6 @@
 #define         EXCCODE_OV          0x0C
 #define         EXCCODE_TR          0x0D
 #define         EXCCODE_FPE         0x0F
-// typedef enum {
-//     INTERRUPT, 
-//     I_ADEL,
-//     I_TLBR,
-//     I_TLBI, 
-//     CP_UNUSABLE,
-//     RESVINST,
-//     INTOVERFLO,
-//     TRAP,
-//     SYSCALL,
-//     BREAKPOINT,
-//     D_ADEL,
-//     D_ADES,
-//     D_TLBRL,
-//     D_TLBRS,
-//     D_TLBIL,
-//     D_TLBIS,
-//     D_TLBM,
-//     ERET
-// } Exception;
 
 typedef enum {
     INTERRUPT, 

@@ -2,7 +2,6 @@
 #define __MIPS32_TRACER_H__
 
 #include "common_defs.h"
-// #include <fstream>
 
 class MIPS32_Tracer {
 private:
