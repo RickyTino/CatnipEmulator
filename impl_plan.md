@@ -341,6 +341,8 @@ public:
   - `tb/eth_test`：按驱动同样的寄存器操作顺序走一遍 TX/RX/MAC 编程/MDIO，断言每一步状态位。
   - `tb/intc_test`（阶段 3）：置输入→查 IPR/IVR→写 IAR 清→查 MER 读回。
   - `tb/sd_test`（阶段 4）：枚举到 CMD9/CMD7，再单块读一个已知扇区比对。
+- **CPU 核自测**（`tb/corner_tests`，2026-10-05 新增；不属于外设扩展，但同一工作区）：裸机汇编用例（`tb/soft/corner/*.s` → `.bin`，镜像入库）专测 golden trace **覆盖不到**的异常/边界路径——除零与 `-2^31/-1` 的 HI/LO、未取真的 likely 分支的 EPC/BD、CP1 的异常码、未映射访问告警。设计：结果经 RAM 固定地址回传（不经 UART，避开终端 raw 模式）、每个用例新建一台机器（CP0 的 `EXL`/`EPC` 会跨用例泄漏）。跑法 `make && make -C tb corner`；改过 `.s` 后用 `make -C tb soft-corner` 重编镜像。
+- **不要重建 `tb/soft/func/obj/main.elf`**（2026-10-05）：`inst/n76_ri_ex.S` 测点 ##1 原用的 `0x45df00e0` 是 **COP1 编码**，在 CU1=0 的机器上规范要求 CpU 而非 RI（Vol III §6.2.22/§6.1），当不了"保留指令"测点，已就地换成保留码 `0x79df00e0`（理由、唯一性与还原命令见 §10 已定 12）。golden trace 按**绝对 PC** 记录，而原程序由竞赛方工具链编出、本机不可复现——一旦重建，整个程序位移、trace 全部对不上。
 - **手工回归**：每步之后 `make && make run -n` 之外要真起一次 u-boot/内核（阶段 0/1 尤其重要，确认没有把 SoC 启动搞坏）。
 - **联调验收**：u-boot `ping`/`tftp`（阶段 2）；Linux `ping`/`ssh`（阶段 3）；`mmcblk0p1`（阶段 4）。
 - 调试手段：已有 `mips32_tracer`；设备内定点日志用编译开关控制（默认关）。
@@ -382,6 +384,10 @@ public:
 10. **1.1 提前建可跑的 `tb/eth_test`；TX 帧先丢弃（2026-10-05 定）**。理由：原计划 1.6 才加 `tb/eth_test` 与 `tb/Makefile` 目标，但阶段 1 的约定是"每步都做验收、`make && make -C tb eth-test` 全绿"——不提前建，1.1 就没有行为证据（且 §2.4 实测表明 u-boot 在发包前完全不访问寄存器，无法充当 1.1 的预言机）。故 1.1 建最小可跑版本（先只覆盖 TX），1.6 扩到全量。同时定：1.1 里 TX 完成的帧**先就地丢弃**，设备内留一个空的投递钩子，阶段 2 再接 `null`/`slirp` 后端（避免在阶段 1 引入后端抽象）。
 
 11. **`PROGRAM` 取走的 MAC 存进设备并加 `macAddress()` getter（2026-10-05 定）**。事实：`BUSY|PROGRAM` 的 6 字节地址在**数据通路上无人读取**——两个驱动都只写不读（MAC 来源是 DT，Linux `xilinx_emaclite.c:1158-1173`），而发帧时帧头的源地址已由协议栈填好（`xemaclite_send_data(lp, skb->data, len)`，`:1030`），所以设备内部这份地址转发不转发都一个样。之所以仍然存下来：**"取走 6 字节"是 1.2 唯一可被测试钉住的语义**，只清位会让这步的断言退化成"TSR 归零"。备选方案"只清位、不存"被否（会让 1.2 无实质覆盖）。将来 3.4 的 `--mac` 选项可复用这份状态。
+
+12. **CP1 全族的异常码归一到 CpU；改的是功能测试程序，不是 RTL（2026-10-05 定）**。依据：Vol III §6.2.22 把 "COP1、COP1X、LWC1、SWC1、LDC1、SDC1、MOVCI" 列在**同一条**里——`Status.CU1 = 0` 时一律报 Coprocessor Unusable（ExcCode `0x0B`、`Cause.CE = 1`）；§6.1 又规定两者都成立时 **CpU 优先于 RI**。MangoMIPS32 的 RTL 本就合规（`Decode.v` 置 `exc_cpu`，`Exception.v` 的优先级把 CpU 排在 RI 前）。原 `OP_COP1` 报 RI 纯粹是为了迁就 golden trace：竞赛程序 `inst/n76_ri_ex.S` 的保留指令测点里用了 COP1 编码 `0x45df00e0`，参考核给它 RI。**错在这个字**，已换成真保留编码 `0x79df00e0`（opcode `0x1E`，同测点 ##2 已是同类保留码）。该字在三个镜像里各出现 1 次，就地替换（`obj/main.elf` 入库、偏移 `0x49edc`；`obj/main.bin`、`obj/inst_ram.coe` 被 gitignore，本地同改）；**严禁从源码重建 `main.elf`**（见 §8）。为什么换一个字就够：RI 与 CpU 进的是同一个 `reserved_inst_ex` 处理程序 → 异常路径相同、记录的 PC/寄存器流不变 → 原 trace 依然成立（实测：只改 cemu 不换字 → `func` 红在 record 86034；换字后 89/89 全绿）。代价：trace 从此不覆盖 COP1 的异常码，由 `tb/corner_tests::cop1_cpu`（断言 `Cause = 0x1000002C`）接替。原字取回：`git show 936afce^:tb/soft/func/inst/n76_ri_ex.S`。
+
+13. **两项性能提案作废（2026-10-05 定）**：① CP0 每周期块（`Count`/`Random`/`Compare`/重建 `cause_ip`）惰性化；② `AXI32_Slave::read/write` 的两层虚调用 + size 分派收敛。两条都只有"读代码得来的估计"、**从没实测**（`perf`/埋点都没做），而本机只有 3 个 slave、线性解码本就接近最优；在 correctness 仍是主要收益面的当下不动。`execute()` 的 decode/execute 拆分只争可读性，同样不做。将来真要提速，先埋点拆成本再定。
 
 **待定（需要你拍板）**
 
@@ -441,3 +447,4 @@ public:
 | 4.5 内核 mmcblk0 验收 | ☐ 未开始 | 验收 `mount /dev/mmcblk0p1` |
 | 4.6 可选项 | ☐ 未开始 | |
 | 5 收尾与文档 | ☐ 未开始 | |
+| C.1 核自测 + CP1 规范对齐 | ✅ 完成 | 2026-10-05（**非外设步骤**）：新增 `tb/corner_tests`（6 用例）；`OP_COP1` 归一到 CpU；`n76_ri_ex.S` 换掉那个 COP1 字；清掉 4 处注释残留。实测 `func` 89/89、`corner` 6/6、`tlb` PASS、u-boot 输出与基线逐字节一致。详见 §8 与 §10 已定 12~13 |

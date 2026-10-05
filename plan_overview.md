@@ -75,6 +75,8 @@
 
 细化到 23 个编号步骤的进度表在 impl_plan.md §11（agent 用）。
 
+> 附带一件不属于外设里程碑的事（2026-10-05）：把 cemu 的 **CP1 异常码按规范归一到 CpU**（原来为了迁就 golden trace 报 RI，而规范与 RTL 都要求 CpU），并新增 **CPU 核自测设施 `tb/corner_tests`**（6 个用例，补 golden trace 的异常路径盲区）；同批清掉 4 处注释残留。详见 impl_plan.md §8 与 §10（已定 12~13）。
+
 ---
 
 ## 5. 需要你拍板的问题
@@ -125,6 +127,7 @@
 |---|---|
 | 现状（没动任何外设）能跑 | `cd catnip_emulator && make run`（u-boot + 内核）或 `make run_linux`（直接起内核） |
 | 寄存器级自测（不跑内核，秒级） | `make && make -C tb eth-test`（M1 之后可用；之后还有 `intc-test` / `sd-test`） |
+| CPU 核边界/异常路径自测（秒级） | `make && make -C tb corner` —— 除零、`-2^31/-1`、likely 分支作废槽的 EPC/BD、CP1 异常码、未映射访问告警 |
 | M2 之后：网络通不通 | `make run` → u-boot 里 `dhcp` → `ping 10.0.2.2`；取文件 `tftpboot 0x81000000 <文件名>` |
 | M3 之后：Linux 网络 | 进 Linux 后 `ifconfig eth0 up`、`ping 10.0.2.2`、`ssh 10.0.2.2` |
 | M5 之后：SD 卡 | 进 Linux 后 `lsblk`（看 `mmcblk0` + `mmcblk0p1`）、`dd if=/dev/mmcblk0p1 ...`、`mount /dev/mmcblk0p1` |
