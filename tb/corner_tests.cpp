@@ -82,13 +82,14 @@ struct Case {
 
 // Expected Cause values are the whole register: this machine has no interrupt
 // sources (no UART, Compare = 0), so only BD, CE and ExcCode can be non-zero.
-//   ADEL = 4 -> 0x10, RI = 10 -> 0x28, BD is bit 31.
+//   ADEL = 4 -> 0x10, RI = 10 -> 0x28, CpU = 11 -> 0x2C with CE = 1 adding
+//   0x10000000, BD is bit 31.
 const Case CASES[] = {
     { "div_zero",      "div_zero.bin",      2, { 0x00000000, 0x00000000 }, 0, false },
     { "div_min",       "div_min.bin",       2, { 0x00000000, 0x80000000 }, 0, false },
     { "likely_null",   "likely_null.bin",   2, { 0xBFC00008, 0x00000010 }, 0, false },
     { "likely_slot",   "likely_slot.bin",   2, { 0xBFC00000, 0x80000010 }, 0, false },
-    { "cop1_ri",       "cop1_ri.bin",       2, { 0xBFC00000, 0x00000028 }, 0, false },
+    { "cop1_cpu",      "cop1_cpu.bin",      2, { 0xBFC00000, 0x1000002C }, 0, false },
     { "unmapped_read", "unmapped_read.bin", 1, { 0x00000000, 0x00000000 }, 8, true  },
 };
 

@@ -260,17 +260,19 @@ void MIPS32_Core::execute(u32 inst)
             }
             break;
 
-        // RI, deliberately - do not "fix" this to CpU.  The golden trace
-        // (tb/soft/func) drives this encoding into the test program's
-        // "reserved instruction" handler, and raising CpU instead makes
-        // "nscscc_tests func" fail at trace record 86034 (reference enters
-        // reserved_inst_ex at 0xbfc0058c, we end up at 0xbfc00624).  The RTL
-        // disagrees: Decode.v leaves instvalid clear for OP_COP1 (so RI is
-        // pending) while raising exc_cpu, and Exception.v's casez gives CpU
-        // (bit 6) priority over RI (bit 7), so MangoMIPS32 reports CpU here.
-        // Where the trace and the RTL conflict, the trace wins - it is what
-        // this emulator is graded against.
-        case OP_COP1:  exception(RESVINST); break;
+        // CpU, not RI: there is no CP1 on CatnipSoC and Status.CU1 always
+        // reads 0, so every CP1-referencing instruction is a Coprocessor
+        // Unusable one.  Vol III 6.2.22 lists "COP1, COP1X, LWC1, SWC1, LDC1,
+        // SDC1 or MOVCI" in a single breath, and 6.1 has CpU outrank RI when
+        // both apply to the same instruction.  The RTL agrees (Decode.v raises
+        // exc_cpu; Exception.v's casez orders CpU before RI).
+        //
+        // The golden trace used to disagree: its reference core answered RI
+        // for a COP1 word inside n76_ri_ex.S's reserved-instruction test, so
+        // matching the trace meant being non-conformant here.  That word has
+        // been replaced with a genuinely reserved encoding, and the trace and
+        // the spec now agree - see the note in tb/soft/func/inst/n76_ri_ex.S.
+        case OP_COP1:  exception(CP_UNUSABLE, 1); break;
         case OP_COP2:  exception(CP_UNUSABLE, 2); break;
         case OP_COP3:  exception(CP_UNUSABLE, 3); break;
         case OP_BEQL:  branch(gpr[rs] == gpr[rt], b_target, 1); break;
@@ -316,6 +318,9 @@ void MIPS32_Core::execute(u32 inst)
         case OP_LL:    load_link(rt, vaddr); break;
         case OP_PREF:  break;
         case OP_SC:    store_cond(rt, vaddr); break;
+        // Same rule as OP_COP1 above: unenabled coprocessor accesses raise
+        // CpU with Cause.CE naming the coprocessor (Vol III 6.2.22 lists
+        // LWC1/LDC1/SWC1/SDC1 alongside COP1; CP2 gets CE = 2, CP3 CE = 3).
         case OP_LWC1:
         case OP_LDC1:
         case OP_SWC1:

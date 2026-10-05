@@ -57,6 +57,14 @@
 // Reference trace for the functional test; only the func test uses it, so it
 // lives next to that program.  (The release ships it under
 // func_test_v0.01/cpu132_gettrace/, not in soft/.)
+//
+// The trace is the reference core's recording for the program as released, and
+// the program carries one local patch: a word in n76_ri_ex.S that was a COP1
+// encoding (which the architecture requires to raise CpU, not RI) became a
+// reserved opcode.  The patch is flow-neutral - the exception path and hence
+// the recorded PC/register stream are unchanged - so the original trace still
+// applies.  See that file for the details and for why main.elf must not be
+// rebuilt from source.
 #define NSCSCC_GOLDEN_TRACE "tb/soft/func/golden_trace.txt"
 
 class NscsccConfreg : public AXI32_Slave {
